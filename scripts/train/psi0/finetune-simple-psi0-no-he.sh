@@ -61,8 +61,8 @@ finetune_simple_psi0_config \
 --data.transform.model.img-aug \
 --data.transform.model.resize.size 180 320 \
 --data.transform.model.center_crop.size 180 320 \
---model.model_name_or_path=/hfm/cache/checkpoints/hfm.pre.fast.egodex.2512241941.ckpt200k \
---model.pretrained-action-header-path=/hfm/cache/checkpoints/postpre.1by130k.pad36.mixed.2601131206.ckpt34k \
+--model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.egodex.2512241941.ckpt200k \
+--model.pretrained-action-header-path=/hfm/cache/checkpoints/psi0/postpre.1by1.pad36.2601131206.ckpt.he30k \
 --model.noise-scheduler=flow \
 --model.train-diffusion-steps=1000 \
 --model.n_conditions=0 \

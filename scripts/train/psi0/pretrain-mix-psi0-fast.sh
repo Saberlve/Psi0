@@ -55,7 +55,7 @@ model.action-tokenizer:fast \
 --data.transform.model.img-sizes.egodex 270 480 \
 --data.transform.model.img-sizes.he 240 320 \
 --data.transform.model.no-img-aug \
---model.model_name_or_path=/hfm/cache/checkpoints/hfm.pre.fast.egodex.2512241941.ckpt200k \
+--model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.egodex.2512241941.ckpt200k \
 --model.action_tokenizer.bins=2048 \
 --model.action_tokenizer.pretrained_checkpoint=src/fast/egodex-rel-50w-1x48-v2048-s100 \
 --model.tune-mm-llm \

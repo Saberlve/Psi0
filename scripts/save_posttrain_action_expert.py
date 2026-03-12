@@ -14,7 +14,7 @@ print("Checkpoint loaded.")
 
 """ # test
 print("Loading pretrained qwen3vl...") 
-qwen3vl_state_dict = load_file(".../workspace/project131/.cache/checkpoints/hfm.pre.fast.egodex.2512241941.ckpt200k/model.safetensors")
+qwen3vl_state_dict = load_file(".../workspace/project131/.cache/checkpoints/psi0/pre.fast.egodex.2512241941.ckpt200k/model.safetensors")
 print("Pretrained model loaded.")
 
 for k, v in qwen3vl_state_dict.items():

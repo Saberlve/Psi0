@@ -61,7 +61,7 @@ args="posttrain_mix_psi0_config \
 --data.transform.model.img-sizes.egodex 270 480 \
 --data.transform.model.img-sizes.he 240 320 \
 --data.transform.model.no-img-aug \
---model.model_name_or_path=/hfm/cache/checkpoints/hfm.pre.fast.mixed.1by1.2601091803.ckpt30k \
+--model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
 --model.noise-scheduler=flow \
 --model.n_conditions=0 \
 --model.action-chunk-size=16 \

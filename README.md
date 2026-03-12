@@ -10,8 +10,8 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2505.03233-df2a2a.svg)](https://arxiv.org/...)
 [![Static Badge](https://img.shields.io/badge/Project-Page-a)](...)
 [![Model](https://img.shields.io/badge/Hugging%20Face-Model-yellow)](https://huggingface.co/songlinwei/psi-model)
-[![Data](https://img.shields.io/badge/Hugging%20Face-Data-pink)](https://huggingface.co/datasets/songlinwei/psi-data/tree/main/real)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Data](https://img.shields.io/badge/Hugging%20Face-Data-pink)](https://huggingface.co/datasets/songlinwei/psi-data)
+[![License](https://img.shields.io/badge/License-Apache2.0-blue.svg)](./LICENSE)
 
 </div>
 
@@ -51,12 +51,9 @@ At the top, the $\Psi_0$ model consists of two end-to-end trained components: a 
   - [Install SIMPLE](#install-simple)
   - [Data Generation](#data-generation)
   - [Fine-Tuning](#training-sim)
-  - [Evaluation](#-)
+  - [Evaluation in SIMPLE](#evaluation-in-simple)
 - [Reproduce Ψ₀: Pre-Training and Post-Training](#pre-post-train)
-- [Checkpoints](#-)
-  - [Pre-Training](#-)
-  - [Post-Training](#-)
-  - [Real-World Tasks](#-)
+- [Checkpoints](#checkpoints)
 - [Troubleshootings](#troubleshootings)
 - [Citation](#️-citation)
 
@@ -68,7 +65,7 @@ At the top, the $\Psi_0$ model consists of two end-to-end trained components: a 
 Clone the project and change directory to the project root:
 ```bash
 git clone git@github.com:physical-superintelligence-lab/Psi0.git 
-cd psi
+cd Psi0
 ```
 We use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage Python dependencies. Install `uv` if not already installed:
 
@@ -294,6 +291,7 @@ We use [SIMPLE]() to benchmark $\Psi_0$ and all the baselines.
 
 #### Motion-Planning Based Data Generation
 #### Teleoperation in Simulator
+[TODO]
 
 <a id="training-sim"></a>
 ### Fine-Tuning
@@ -324,8 +322,7 @@ bash scripts/train/psi0/finetune-simple-psi0.sh $task
 ```
 The training will create a run dir which is located under `.runs` in the project root.
 
-### Evaluation
-[TODO]
+### Evaluation in SIMPLE
 
 #### Serve $\Psi_0$
 ```
@@ -338,8 +335,13 @@ uv run --active --group psi --group serve serve_psi0 \
   --ckpt-step=$ckpt_step
 ```
 
+
+Run open-loop evaluation (offline)
+
+[examples/simple/openloop_eval.ipynb](examples/simple/openloop_eval.ipynb)
+
 #### Run the Evaluation Client
-> If the server is started on a remote server, try ssh port forward `ssh -L 22086:localhost:22086 songlin@nebula100`.
+> If the server is started on a remote server, run ssh port forward. eg., `ssh -L 22086:localhost:22086 songlin@nebula100`.
 
 > Once port forward is done, open a new terminal to test if server is up `curl -i http://localhost:22085/health`
 
@@ -355,37 +357,9 @@ GPUs=1 docker compose run eval $task psi0 \
     --data-format=lerobot \
     --data-dir=data/$task
 ```
-The policy rollout videos can be found at `third_party/SIMPLE/data/evals/psi0`.
+The policy rollout videos will be found in folder `third_party/SIMPLE/data/evals/psi0`.
 
-> The evaluation for a single episode could take up to 6~10 minutes until reaches the maximum allowd steps. Because SIMPLE use a synchronous rendering API in IsaacSim. See here for [more explanation](#).
-
-
-
-
-open-loop evaluation (offline)
-```
-python scripts/train/hfm/psi0_inference_simple.py
-```
-
-open-loop evaluation (online)
-running serve 
-```
-uv run --active --group psi --group serve serve_psi0 \
-    --host 0.0.0.0 \
-    --port 22085 \
-    --run-dir=.runs/.runs/hfm-finetune/sim.bent-pick.simpl.flow1000.cosin.lr1.0e-04.b128.gpus4.2602060529 \
-    --ckpt-step=41999
-```
-
-check if server is running
-```
-curl -i http://localhost:22085/health
-```
-
-launch client
-```
-python scripts/client/psi0_simple.py
-```
+> The evaluation for a single episode could take up to 6~10 minutes because SIMPLE use a synchronous rendering API in IsaacSim. See here for [more explanation](#).
 
 <a id="pre-post-train"></a>
 ## Reproduce Ψ₀: Pre-Training and Post-Training
@@ -393,78 +367,74 @@ python scripts/client/psi0_simple.py
 
 ### Pre-Train VLM
 
-predownload the `Qwen/Qwen3-VL-2B-Instruct` weights
+Download and cache the official `Qwen/Qwen3-VL-2B-Instruct` weights.
 ```
 scripts/predownload_qwen3vl.py
 ```
 
-pretrain on egodex
+Pre-train on the [EgoDex dataset](https://github.com/apple/ml-egodex)
 ```
 bash scripts/train/psi0/pretrain-egodex-psi0-fast.sh 
 ```
 
-pretrain on humanoid everyday
+Pre-train on [humanoid everyday dataset](https://huggingface.co/datasets/USC-GVL/humanoid-everyday)
 ```
-bash scripts/train/psi0/pretrain-he-psi0-fast.sh 
+bash scripts/train/psi0/pretrain-he-psi0-fast.sh
+```
+
+Save the pretrained checkpoints once training is done:
+```
+python scripts/save_pretrain_qwen3vl_backbone.py
 ```
 
 ### Post-Train Action Expert
 
-submit a slurm job
-```
-scripts/train/hfm/nv_slurm.sh
-```
-save the pretrained checkpoints
-```
-python scripts/train/hfm/hfm_save_pretrain.py
-```
-upload to huggingface
-```
-hf upload songlinwei/hfm-models \
-  .runs/hfm/pre.fast.egodex.delta.c1.const.lr1.0e-04.b1024.gpus64.2512241941/pretrained/ckpt_200000 \
-  pre.fast.egodex.2512241941/pretrained/ckpt_200000 \
-  --repo-type model
-```
-download pretrained hfm
+Download pre-trained `psi-0` VLM backbone
 ```
 python scripts/data/download.py \
-  --repo-id=songlinwei/hfm-models \
+  --repo-id=songlinwei/psi-models \
   --remote-dir=pre.fast.egodex.2512241941/pretrained/ckpt_200000 \
-  --local-dir=/hfm/cache/checkpoints/hfm.pre.fast.egodex.2512241941.ckpt200k \
+  --local-dir=/hfm/cache/checkpoints/psi0/pre.fast.egodex.2512241941.ckpt200k \
   --repo-type=model
+```
+
+Post-train on [humanoid everyday (HE) dataset](https://huggingface.co/datasets/USC-GVL/humanoid-everyday)
+```
+bash scripts/train/psi0/posttrain-he-psi0.sh
+```
+
+Save post-trained action header once training is over
+```
+python scripts/save_posttrain_action_expert.py
 ```
 
 ## Checkpoints
 
-[TODO] make a table
+The released checkpoints on [HuggingFace Psi-Model](https://huggingface.co/songlinwei/psi-model) is listed
 
-Download psi-0 VLM (egodex)
+| Checkpoint | Description | Remote Directory |
+|---|---|---|
+| $\Psi_0$ VLM<br/>(Baseline) | Pre-trained VLM backbone (EgoDex 200K steps + HE 30K steps) | `psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k` |
+| $\Psi_0$ Action Expert<br/>(Baseline) | Post-trained Action Expert On HE | `psi0/postpre.1by1.pad36.2601131206.ckpt.he30k` |
+
+and more variants for ablation studies:
+| Checkpoint | Description | Remote Directory |
+|---|---|---|
+| $\Psi_0$ VLM<br/>(Ablation Study) | Pre-trained VLM backbone only on EgoDex 200K steps | `psi0/pre.fast.egodex.2512241941.ckpt200k` |
+| $\Psi_0$ VLM<br/>(Ablation Study) | Pre-trained VLM backbone only on HE 48K steps  | `psi0/pre.abl.only.he.2512311516.48k` |
+| $\Psi_0$ VLM<br/>(Ablation Study) | Pre-trained VLM backbone only on 10% EgoDex  | `psi0/pre.abl.ego.10per.2602021632.46k` |
+| $\Psi_0$ Action Expert<br/>(Ablation Study) | Post-train on HE by picking pre-trained variant `psi0/pre.abl.only.he.2512311516.48k` | `psi0/postpre.abl.only.he.2602050012` |
+| $\Psi_0$ Action Expert<br/>(Ablation Study) | Post-train on HE by picking pre-trained variant `psi0/pre.abl.ego.10per.2602021632.46k` | `postpre.abl.ego.10per.2602050006` |
+
+
+Download the selected models
+
 ```
-python scripts/data/download.py \
-  --repo-id=songlinwei/hfm-models \
-  --remote-dir=pre.fast.egodex.2512241941/pretrained/ckpt_200000 \
-  --local-dir=/hfm/cache/checkpoints/hfm.pre.fast.egodex.2512241941.ckpt200k \
+hf download songlinwei/psi-models \
+  --remote-dir=<remote dictory on huggingface repo>
+  --local-dir=$PSI_HOME/cache/checkpoints \
   --repo-type=model
 ```
-
-Download psi-0 VLM (mixed pre-training)
-```
-python scripts/data/download.py \
-  --repo-id=songlinwei/hfm-models \
-  --remote-dir=pre.fast.mixed.1by1.2601091803/pretrained/ckpt_30000 \
-  --local-dir=hfm.pre.fast.mixed.1by1.2601091803.ckpt30k \
-  --repo-type=model
-```
-
-Download psi-0 action-header
-```
-python scripts/data/download.py \
-  --repo-id=songlinwei/hfm-models \
-  --remote-dir=postpre.1by130k.pad36.mixed.2601131206/pretrained/ckpt_34000 \
-  --local-dir=postpre.1by130k.pad36.mixed.2601131206.ckpt34k \
-  --repo-type=model
-```
-
 
 ## Troubleshootings
 
@@ -512,3 +482,14 @@ uv pip install flash-attn --no-build-isolation
 ```
 GIT_LFS_SKIP_SMUDGE=1 uv ...
 ```
+## Citation
+
+```
+[TODO]
+```
+
+## License
+
+This project is licensed under the Apache License 2.0.
+
+See the [LICENSE](LICENSE) file for details.
