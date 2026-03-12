@@ -37,7 +37,7 @@ At the top, the $\Psi_0$ model consists of two end-to-end trained components: a 
   - [Installation](#installation)
   - [Data Collection](#data-collection)
   - [Fine-Tuning](#training-real)
-  - [Open-Loop Evaluation](#-)
+  - [Open-Loop Evaluation](#open-loop-evaluation)
   - [Deployment](#deployment)
 - [Baselines](#baselines)
   - [GR00T N1.6](#groot-n16)
@@ -67,7 +67,7 @@ At the top, the $\Psi_0$ model consists of two end-to-end trained components: a 
 
 Clone the project and change directory to the project root:
 ```bash
-git clone git@github.com:songlin/psi.git
+git clone git@github.com:physical-superintelligence-lab/Psi0.git 
 cd psi
 ```
 We use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage Python dependencies. Install `uv` if not already installed:
@@ -214,7 +214,9 @@ scripts/train/psi0/finetune-real-psi0.sh $task
 
 
 ### Open-Loop Evaluation
-[TODO]
+> Follow the steps in `examples/simple/openloop_eval.ipynb`
+
+Load the training dataset, and run model inference to see how model fits the training data.
 
 ### Deployment
 
@@ -468,7 +470,7 @@ python scripts/data/download.py \
 
 1. Lerobot dataset issues: `stack(): argument 'tensors' (position 1) must be tuple of Tensors, not Column`
 
-> ⚠️ change the path of `.env` if needed
+> ⚠️ change `.env/...` to the target env path.
 
 ```
 cp src/lerobot_patch/common/datasets/lerobot_dataset.py \

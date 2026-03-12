@@ -37,7 +37,7 @@ finetune_simple_psi0_config \
 --train.max_training_steps=40000 \
 --train.warmup_ratio=None \
 --train.warmup_steps=1000 \
---train.checkpointing_steps=5000 \
+--train.checkpointing_steps=10000 \
 --train.validation_steps=500 \
 --train.val_num_batches=20 \
 --train.max_grad_norm=1.0 \

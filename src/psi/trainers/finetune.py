@@ -495,14 +495,14 @@ class FinetuneTrainer(Trainer):
         torso_dyaw_start, torso_dyaw_end = 35, 36
     
         labels_denormed = [
-            "val/denorm_err_l1_hand_joints",
-            "val/denorm_err_l1_arm_joints",
-            "val/denorm_err_l1_rpy",
-            "val/denorm_err_l1_height",
-            "val/denorm_err_l1_torso_vx",
-            "val/denorm_err_l1_torso_vy",
-            "val/denorm_err_l1_torso_vyaw",
-            "val/denorm_err_l1_torso_target_yaw",
+            "err_l1_hand_joints",
+            "err_l1_arm_joints",
+            "err_l1_torso_rpy",
+            "err_l1_height",
+            "err_l1_vx",
+            "err_l1_vy",
+            "err_l1_vyaw",
+            "err_l1_target_yaw",
         ]
     
         avg_lr_action_err_denormed = np.split(
