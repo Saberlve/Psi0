@@ -170,7 +170,7 @@ Now it's ready to finetune $\Psi_0$.
 
 > ✔️ Suppose the data is already collected and processed. Now we can proceed to fine-tune the $\Psi_0$ model.
 
->  There is a [known issue](https://github.com/physical-superintelligence-lab/Psi0/issues/3) of loading our real data, apply this fix first `python patch_lerobot_meta.py $PSI_HOME/data/real/$task`
+>  There is a [known issue](https://github.com/physical-superintelligence-lab/Psi0/issues/3) of loading our real data, apply this fix first `python scripts/data/patch_lerobot_meta.py $PSI_HOME/data/real/$task`
 
 > 📝 Here we illustrate by using the pre-collected data from [Huggingface psi-data](https://huggingface.co/datasets/USC-PSI-Lab/psi-data/tree/main/real).
 
@@ -260,6 +260,11 @@ cd src/gr00t
 ./scripts/openloop_eval.sh
 ```
 
+<a id="openpi-05"></a>
+
+### OpenPI $\pi_{0.5}$
+
+Please see more detailed instructions here: [baselines/pi05](baselines/pi05/README.md).
 
 ### InternVLA-M1
 Install the env 
@@ -397,6 +402,9 @@ bash scripts/train/psi0/pretrain-egodex-psi0-fast.sh
 ```
 
 Pre-train on [humanoid everyday dataset](https://huggingface.co/datasets/USC-GVL/humanoid-everyday)
+
+> Please download the pre-processed HE data here:  `hf download USC-PSI-Lab/psi-data HE_RAW.zip --repo-type=dataset`
+
 ```
 bash scripts/train/psi0/pretrain-he-psi0-fast.sh
 ```
