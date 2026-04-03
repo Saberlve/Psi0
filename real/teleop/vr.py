@@ -37,8 +37,6 @@ from teleop.constants_vuer import (
 )
 from motion_utils import fast_mat_inv, mat_update
 
-# height_offset = 1.88 - TELEOPERATOR_HEIGHT
-
 
 class VuerPreprocessor:
     def __init__(self, manus_receiver=None):

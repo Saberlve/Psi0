@@ -114,7 +114,52 @@ settings > Apps > Safari > Advanced > Feature Flags > Enable WebXR Related Featu
 
 7. Click `Enter VR` and `Allow` to start the VR session.
 
+## PICO Only Setup Local streaming
 
+1. install PICO streaming python sdk on your host machine (Please follow [TWIST2](https://github.com/amazon-far/TWIST2) related commands as follows)
+
+```bash
+conda activate psi_deploy
+
+git clone https://github.com/YanjieZe/XRoboToolkit-PC-Service-Pybind.git
+cd XRoboToolkit-PC-Service-Pybind
+
+mkdir -p tmp
+cd tmp
+git clone https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git
+cd XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK 
+bash build.sh
+cd ../../../..
+
+
+mkdir -p lib
+mkdir -p include
+cp tmp/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/PXREARobotSDK.h include/
+cp -r tmp/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/nlohmann include/nlohmann/
+cp tmp/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/build/libPXREARobotSDK.so lib/
+# rm -rf tmp
+
+# Build the project
+conda install -c conda-forge pybind11
+pip uninstall -y xrobotoolkit_sdk
+python setup.py install
+```
+
+2. follow the “Install XRoboToolkit-PC-Service” instructions from [XR Robotics](https://github.com/XR-Robotics) to install the PICO service on your workstation.
+
+3. install [PICO SDK](https://github.com/XR-Robotics/XRoboToolkit-Unity-Client/releases/) on your PICO.
+
+4. connect your PICO and workstation using the same WIFI. Suppose PICO IP is `192.168.0.128`, Host IP is `192.168.0.110`
+
+<p align="center">
+  <img src="../assets/media/pico.png" alt="Psi0 teaser image" />
+</p>
+
+5. select `Head`, `Controller` and `Hand` under the Tracking Session, and then enable the `Send` Switch.
+
+6. select `ZEDMINI` under the Remote Vision Session and click the `Listen` button, then input your PC IP inside.
+
+7. put down pico controllers and wait until PICO activates its hand tracking mode automatically (You can see virtual hands around your own hands).
 
 # Start Teleoperation and Data Collection
 
@@ -145,12 +190,13 @@ python realsense_server.py
 export CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>192.168.123.123</NetworkInterfaceAddress></General></Domain></CycloneDDS>"
 ```
 
-7. On host computer: run `python main.py --robot g1` under the `teleop/` directory and wait until the robot is standing in ready state. The terminal should signal both "master" and "worker" processes are waiting for starting signal.
+7. (**Vision Pro Option**) On host computer: run `python main.py --robot g1` under the `teleop/` directory and wait until the robot is standing in ready state. The terminal should signal both "master" and "worker" processes are waiting for starting signal.
 8. On AVP, connect to robot using https://<host_ip_address_on_your_local_router>:8012/?ws=wss://<host_ip_address_on_your_local_router>:8012. Then, press `Enter VR` and then `Allow` to enter the web interface for teleoperating the G1.
-9. Back on host computer, enter `s` to start recording an episode.
-10. Type `q` and enter if the episode is successful, otherwise `d` and enter to discard the last session.
-11. Repeat by pressing `s` to start recording the next episode. Record 40 episodes for each task.
-12. Type `exit` to shut down the program.
+9. (**PICO Option**) On host computer: run `python main.py --robot g1 --pico_streamer --pico_ip 192.168.0.128 (YOUR_PICO_IP)` under the `teleop/` directory and wait until the robot is standing in ready state. The terminal should signal both "master" and "worker" processes are waiting for starting signal.
+10. Back on host computer, enter `s` to start recording an episode.
+11. Type `q` and enter if the episode is successful, otherwise `d` and enter to discard the last session.
+12. Repeat by pressing `s` to start recording the next episode. Record 40 episodes for each task.
+13. Type `exit` to shut down the program.
 
 # Acknowledgement
 

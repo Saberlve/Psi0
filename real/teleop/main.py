@@ -11,10 +11,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--robot", default="g1", help="Use g1 controllers")
+    parser.add_argument("--pico_streamer", action="store_true", help="Enable Pico IR Streamer")
+    parser.add_argument("--pico_ip", type=str, default="192.168.0.128", help="Pico IP address")
     args = parser.parse_args()
 
     manager = TeleopManager(
-        task_name=args.task_name, robot=args.robot, debug=args.debug
+        task_name=args.task_name, robot=args.robot, debug=args.debug, pico_streamer=args.pico_streamer, pico_ip=args.pico_ip
     )
     manager.start_processes()
     # TODO: run in two separate terminals for debuggnig

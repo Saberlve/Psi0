@@ -15,7 +15,14 @@ import zmq
 
 from teleop.utils.logger import logger
 from vr import VuerTeleop
+from vr_pico import PicoTeleop
 from writers import AsyncImageWriter, AsyncWriter
+
+import socket
+import struct
+import gi
+gi.require_version("Gst", "1.0")
+from gi.repository import Gst
 
 # from turbojpeg import TJPF_BGR, TurboJPEG
 
@@ -30,12 +37,139 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 
+class PicoIRStreamer:
+    def __init__(self, pico_ip, port, width=1280, height=720, fps=30):
+        self.pico_ip = pico_ip
+        self.port = port
+        self.width = width
+        self.height = height
+        self.fps = fps
+
+        self._running = False
+        self._connected = False
+        self._sock = None
+        self._pipeline = None
+        self._appsrc = None
+        self._frame_id = 0
+
+        self._latest_frame = None
+        self._lock = threading.Lock()
+
+    def start(self):
+        Gst.init(None)
+        self._running = True
+        self._start_pipeline()
+        threading.Thread(target=self._connection_loop, daemon=True).start()
+        threading.Thread(target=self._push_loop, daemon=True).start()
+        print(f"[PicoIRStreamer] started, target={self.pico_ip}:{self.port}")
+
+    def submit_frame(self, frame_bgr):
+        with self._lock:
+            self._latest_frame = frame_bgr.copy()
+
+    def _connection_loop(self):
+        while self._running:
+            if not self._connected:
+                old = self._sock
+                self._sock = None
+                if old is not None:
+                    try:
+                        old.close()
+                    except Exception:
+                        pass
+
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(2.0)
+                    s.connect((self.pico_ip, self.port))
+                    s.settimeout(None)
+                    self._sock = s
+                    self._connected = True
+                    print(f"[PicoIRStreamer] connected to {self.pico_ip}:{self.port}")
+                except Exception:
+                    pass
+
+            time.sleep(1.0)
+
+    def _start_pipeline(self):
+        pipe_str = (
+            f"appsrc name=src is-live=True format=time ! "
+            f"video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
+            f"videoconvert ! "
+            f"x264enc tune=zerolatency speed-preset=ultrafast key-int-max=15 ! "
+            f"video/x-h264,profile=baseline ! "
+            f"h264parse config-interval=-1 ! "
+            f"video/x-h264,stream-format=byte-stream,alignment=au ! "
+            f"appsink name=sink emit-signals=True sync=False"
+        )
+        self._pipeline = Gst.parse_launch(pipe_str)
+        self._appsrc = self._pipeline.get_by_name("src")
+        appsink = self._pipeline.get_by_name("sink")
+        appsink.connect("new-sample", self._on_encoded_frame)
+        self._pipeline.set_state(Gst.State.PLAYING)
+
+    def _on_encoded_frame(self, sink):
+        sample = sink.emit("pull-sample")
+        buf = sample.get_buffer()
+        ok, info = buf.map(Gst.MapFlags.READ)
+        if ok:
+            if self._connected and self._sock is not None:
+                try:
+                    header = struct.pack(">I", len(info.data))
+                    self._sock.sendall(header + info.data)
+                except Exception:
+                    self._connected = False
+                    print("[PicoIRStreamer] connection lost, retrying...")
+            buf.unmap(info)
+        return Gst.FlowReturn.OK
+
+    def _push_loop(self):
+        dt = 1.0 / self.fps
+        while self._running:
+            t0 = time.time()
+
+            frame = None
+            with self._lock:
+                if self._latest_frame is not None:
+                    frame = self._latest_frame.copy()
+                    self._latest_frame = None 
+
+            if frame is not None and self._appsrc is not None:
+                if frame.shape[1] != self.width or frame.shape[0] != self.height:
+                    frame = cv2.resize(frame, (self.width, self.height))
+
+                gst_buf = Gst.Buffer.new_wrapped(np.ascontiguousarray(frame).tobytes())
+                gst_buf.pts = self._frame_id * (Gst.SECOND // self.fps)
+                gst_buf.duration = Gst.SECOND // self.fps
+                self._appsrc.emit("push-buffer", gst_buf)
+                self._frame_id += 1
+
+            elapsed = time.time() - t0
+            if elapsed < dt:
+                time.sleep(dt - elapsed)
+
+    def stop(self):
+        self._running = False
+        self._connected = False
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+        if self._pipeline is not None:
+            self._pipeline.set_state(Gst.State.NULL)
+            self._pipeline = None
+
+
+
 class TeleoperatorProcess:
-    def __init__(self, teleop_shm_array, img_shm_name, kill_event, ir_data_queue, session_start_event):
+    def __init__(self, teleop_shm_array, img_shm_name, kill_event, ir_data_queue, session_start_event, is_pico_streamer=False):
         self.teleop_shm_array = teleop_shm_array
         self.kill_event = kill_event
         self.ir_data_queue = ir_data_queue
         self.session_start_event = session_start_event
+        self.is_pico_streamer = is_pico_streamer
 
         # Connect to the shared memory for images created by the worker
         self.img_shm = shared_memory.SharedMemory(name=img_shm_name)
@@ -44,8 +178,11 @@ class TeleoperatorProcess:
             (height, width, 3), dtype=np.uint8, buffer=self.img_shm.buf
         )
 
-        # Pass the shared memory name so that VuerTeleop attaches to the same memory
-        self.teleoperator = VuerTeleop(img_shm_name)
+        if self.is_pico_streamer:
+            self.teleoperator = PicoTeleop()
+        else:
+            # Pass the shared memory name so that VuerTeleop attaches to the same memory
+            self.teleoperator = VuerTeleop(img_shm_name)
 
     def _ir_loop(self):
         """Thread that processes IR image data and copies it to shared memory."""
@@ -110,7 +247,7 @@ class TeleoperatorProcess:
 
 
 class RobotDataWorker:
-    def __init__(self, shared_data, robot_shm_array, teleop_shm_array, robot="h1"):
+    def __init__(self, shared_data, robot_shm_array, teleop_shm_array, robot="h1", is_pico_streamer=False, pico_ip="192.168.0.128"):
         self.robot = robot
         self.shared_data = shared_data
         self.kill_event = shared_data["kill_event"]
@@ -128,6 +265,9 @@ class RobotDataWorker:
         self.teleop_shm_array = teleop_shm_array
         self.depth_kill_event = Event()
         self.teleop_kill_event = Event()
+
+        self.is_pico_streamer = is_pico_streamer
+        self.pico_ip = pico_ip
 
         height, width = 720, 1280  # Match the dimensions expected by teleoperator
         self.img_shm = shared_memory.SharedMemory(
@@ -161,6 +301,17 @@ class RobotDataWorker:
             f"Worker started teleoperator process with PID {self.teleop_proc.pid}"
         )
 
+        if self.is_pico_streamer:
+
+            self.pico_streamer = PicoIRStreamer(
+                pico_ip=self.pico_ip,
+                port=12345,
+                width=1280,
+                height=720,
+                fps=30,
+            )
+            self.pico_streamer.start()
+
         # resetable vars
         self.frame_idx = 0
         self.last_robot_data = None
@@ -170,7 +321,7 @@ class RobotDataWorker:
         self, teleop_shm_array, img_shm_name, kill_event, ir_data_queue, session_start_event
     ):
         teleop_process = TeleoperatorProcess(
-            teleop_shm_array, img_shm_name, kill_event, ir_data_queue, session_start_event
+            teleop_shm_array, img_shm_name, kill_event, ir_data_queue, session_start_event, self.is_pico_streamer
         )
         teleop_process.run()
 
@@ -379,6 +530,9 @@ class RobotDataWorker:
             self.img_shm.close()
             self.img_shm.unlink()
 
+            if hasattr(self, "pico_streamer") and self.pico_streamer is not None:
+                self.pico_streamer.stop()
+
             # self.teleoperator.shutdown()
             self.depth_kill_event.set()
             self.depth_proc.join()
@@ -420,6 +574,27 @@ class RobotDataWorker:
 
     def _send_image_to_teleoperator(self, ir_array):
         self.ir_data_queue.put(ir_array)
+    
+    
+    def _send_ir_to_pico(self, ir_array):
+        if ir_array is None:
+            return
+        try:
+            ir_np = np.frombuffer(ir_array, dtype=np.uint8)
+            ir_img = cv2.imdecode(ir_np, cv2.IMREAD_COLOR)
+
+            if ir_img is None:
+                logger.warning("Failed to decode IR image")
+                return
+
+            ir_img = cv2.resize(ir_img, (1280, 720), interpolation=cv2.INTER_LINEAR)
+
+            if hasattr(self, "pico_streamer") and self.pico_streamer is not None:
+                self.pico_streamer.submit_frame(ir_img)
+
+        except Exception as e:
+            logger.error(f"Failed to send IR to Pico: {e}")
+
 
     def _session_init(self):
         if "dirname" not in self.shared_data:
@@ -433,7 +608,10 @@ class RobotDataWorker:
         logger.debug("request frame")
         rgb_array, ir_array, depth_array = self._recv_zmq_frame()
         logger.debug("got frame")
-        self._send_image_to_teleoperator(ir_array)
+        if self.is_pico_streamer:
+            self._send_ir_to_pico(ir_array)
+        else:
+            self._send_image_to_teleoperator(ir_array)
         time_curr = time.time()
 
         # logger.debug(f"Worker: got image")

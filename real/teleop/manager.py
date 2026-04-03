@@ -24,8 +24,10 @@ sys.path.append(parent_dir)
 
 
 class TeleopManager:
-    def __init__(self, task_name="default_task", robot="h1", debug=False):
+    def __init__(self, task_name="default_task", robot="h1", debug=False, pico_streamer=False, pico_ip="192.168.0.128"):
         self.task_name = task_name
+        self.pico_streamer = pico_streamer
+        self.pico_ip = pico_ip
         logger.info(f"#### (Task: {self.task_name}):")
         if debug:
             logger.setLevel(logging.DEBUG)
@@ -97,7 +99,7 @@ class TeleopManager:
 
         def run_dataworker():
             taskworker = RobotDataWorker(
-                self.shared_dict, self.robot_shm_array, self.teleop_shm_array, robot
+                self.shared_dict, self.robot_shm_array, self.teleop_shm_array, robot, self.pico_streamer, self.pico_ip
             )
             taskworker.start()
 
