@@ -5,11 +5,12 @@ build/
 dist/
 wheels/
 *.egg-info
-
+.env
+.env.sample
 # Virtual environments
 .venv*
-
-/data/
+**/model/**
+**/data/**
 cache
 *.mp4
 ml-egodex_dataset/ # soft link to the egodex dataset

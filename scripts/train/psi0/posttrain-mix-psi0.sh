@@ -40,9 +40,9 @@ args="posttrain_mix_psi0_config \
 --data.use-delta-actions \
 --data.sampler=token_mixture \
 --data.tokens_per_device=8640 \
---data.he.root-dir=/hfm/data/HE_RAW_no_static \
+--data.he.root-dir=$PSI_HOME/data/HE_RAW_no_static \
 --data.he.ratio=0.5 \
---data.egodex.root-dir=/hfm/data/egodex \
+--data.egodex.root-dir=$PSI_HOME/data/egodex \
 --data.egodex.load-retarget \
 --data.egodex.ratio=0.5 \
 --data.use-delta-actions \
@@ -61,7 +61,7 @@ args="posttrain_mix_psi0_config \
 --data.transform.model.img-sizes.egodex 270 480 \
 --data.transform.model.img-sizes.he 240 320 \
 --data.transform.model.no-img-aug \
---model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
+--model.model_name_or_path=$PSI_HOME/model/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
 --model.noise-scheduler=flow \
 --model.n_conditions=0 \
 --model.action-chunk-size=16 \

@@ -27,7 +27,7 @@ args="
 finetune_simple_psi0_config \
 --seed=292285 \
 --exp=$exp \
---train.resume_from_checkpoint=/hfm/zhenyu/psi/.runs/finetune/bend-pick.simple.flow1000.cosine.lr1.0e-04.b64.gpus4.2603032307
+--train.resume_from_checkpoint=$PSI_HOME/.runs/finetune/bend-pick.simple.flow1000.cosine.lr1.0e-04.b64.gpus4.2603032307
 --train.name=finetune \
 --train.data_parallel=ddp \
 --train.mixed_precision=bf16 \
@@ -46,7 +46,7 @@ finetune_simple_psi0_config \
 --train.lr_scheduler_kwargs.weight_decay=1e-6 \
 --train.lr_scheduler_kwargs.betas 0.95 0.999 \
 --log.report_to=wandb \
---data.root_dir=/hfm/data/simple/simple \
+--data.root_dir=$PSI_HOME/data/simple/simple \
 --data.train-repo-ids=$task \
 --data.transform.repack.pad-action-dim=36 \
 --data.transform.repack.pad-state-dim=36 \
@@ -61,8 +61,8 @@ finetune_simple_psi0_config \
 --data.transform.model.img-aug \
 --data.transform.model.resize.size 180 320 \
 --data.transform.model.center_crop.size 180 320 \
---model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.egodex.2512241941.ckpt200k \
---model.pretrained-action-header-path=/hfm/cache/checkpoints/psi0/postpre.1by1.pad36.2601131206.ckpt.he30k \
+--model.model_name_or_path=$PSI_HOME/model/psi0/pre.fast.egodex.2512241941.ckpt200k \
+--model.pretrained-action-header-path=$PSI_HOME/model/psi0/postpre.1by1.pad36.2601131206.ckpt.he30k \
 --model.noise-scheduler=flow \
 --model.train-diffusion-steps=1000 \
 --model.n_conditions=0 \

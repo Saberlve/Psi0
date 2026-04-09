@@ -41,7 +41,7 @@ model.action-tokenizer:fast \
 --data.transform.field.stat-action-key=egodex \
 --data.transform.field.stat-path=assets/stats/egodex_stat_all.json \
 --data.transform.model.resize.size 270 480 \
---data.root-dir=/hfm/data/egodex \
+--data.root-dir=$PSI_HOME/data/egodex \
 --data.use-delta-actions \
 --data.transform.model.no-img-aug \
 --model.action_tokenizer.bins=2048 \
