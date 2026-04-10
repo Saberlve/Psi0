@@ -54,12 +54,13 @@ step1_download() {
 }
 
 # -----------------------------------------------------------------------------
-# 步骤2: 解压数据
+# 步骤2: 解压数据,真机数据从这一步开始运行
 # -----------------------------------------------------------------------------
 step2_unzip() {
     # -------------------- 复制以下内容运行 --------------------
     export TASK=${TASK:-"Hug_box_and_move"}  # 修改为你的任务名称
-  
+    
+    # 所有数据放到${PSI_HOME}/data/real_teleop_g1目录下
     DATA_ROOT="${PSI_HOME}/data/real_teleop_g1"
     unzip -o "${DATA_ROOT}/g1_real_raw/${TASK}.zip" \
         -d "${DATA_ROOT}/g1_real_raw/${TASK}"
@@ -71,12 +72,13 @@ step2_unzip() {
 # -----------------------------------------------------------------------------
 step3_convert() {
     # -------------------- 复制以下内容运行 --------------------
-    export TASK=${TASK:-"Hug_box_and_move"}
+    export TASK=${TASK:-"Hug_box_and_move"} # 修改为你的任务名称
 
     # 如果使用自己的数据，修改 DATA_ROOT 为你的原始数据路径
     # 原始数据应符合以下结构:
     # DATA_ROOT/g1_real_raw/$TASK/episode_0/color/frame_xxx.jpg
     # DATA_ROOT/g1_real_raw/$TASK/episode_0/data.json
+    # 如果不一样请新建转换脚本
     DATA_ROOT="${PSI_HOME}/data/real_teleop_g1"
     WORK_DIR="${PSI_HOME}/data/real"
 

@@ -10,15 +10,15 @@ ulimit -n 65535
 echo "Training with $NPROC_PER_NODE GPUs"
 
 if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <task> [exp]"
-    echo "Example: $0 Pick_toys_into_box_and_lift_and_turn_and_put_on_the_chair_new_target_yaw pick-toys"
+    echo "Usage: bash $0 <task> [exp]"
+    echo "Example: bash /home/ubuntu/Psi0/scripts/train/psi0/finetune-real-psi0.sh Hug_box_and_move box-move"
     exit 1
 fi
 
-export task="$1"  # change
+export task="$1"  # ⚠️ 修改或命令行传入任务名称
 task_words=$(echo "$task" | tr '[:upper:]' '[:lower:]' | tr '_' ' ')
 default_exp=$(echo "$task_words" | awk '{if (NF>=2) print $1 "-" $2; else print $1}')
-export exp=${2:-$default_exp}  # change
+export exp=${2:-$default_exp}  # ⚠️ 修改或命令行传入实验名称
 
 echo "Task: $task"
 echo "Experiment name: $exp"
