@@ -1,0 +1,1 @@
+../../train/psi0/pretrain-mix-psi0-fast.sh

@@ -1,0 +1,1 @@
+../../deploy/serve_psi0_simple.sh

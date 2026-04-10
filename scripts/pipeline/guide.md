@@ -1,0 +1,3 @@
+先看data下面脚本,把data转换成lerobot格式,然后计算norm stats放到对应文件中.
+然后修改task训练上
+depoly 也是按照task deploy

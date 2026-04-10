@@ -1,0 +1,1 @@
+../../train/psi0/finetune-simple-psi0.sh

@@ -1,0 +1,1 @@
+../../../real/scripts/deploy_psi0-rtc.sh

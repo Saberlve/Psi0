@@ -1,0 +1,1 @@
+../../train/psi0/pretrain-egodex-psi0-fast.sh

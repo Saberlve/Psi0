@@ -1,0 +1,1 @@
+../../train/psi0/posttrain-mix-psi0.sh
