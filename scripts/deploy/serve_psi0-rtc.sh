@@ -44,9 +44,12 @@ if [[ "$INPUT_PATH" == /* ]] || [[ "$INPUT_PATH" == ./* ]]; then
     CHECKPOINT_DIR="$INPUT_PATH"
 else
     # task 名称，自动查找最新的 run
+    # 注意：与 finetune-real-psi0.sh 的目录名生成逻辑保持一致
+    # finetune 使用: echo "$task" | tr '[:upper:]' '[:lower:]' | tr '_' ' ' | awk '{if (NF>=2) print $1 "-" $2; else print $1}'
     TASK="$INPUT_PATH"
-    TASK_LOWER=$(echo "$TASK" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-    RUNS_DIR="$PSI_HOME/runs/finetune"
+    TASK_WORDS=$(echo "$TASK" | tr '[:upper:]' '[:lower:]' | tr '_' ' ')
+    TASK_PREFIX=$(echo "$TASK_WORDS" | awk '{if (NF>=2) print $1 "-" $2; else print $1}')
+    RUNS_DIR="$PSI_HOME/.runs/finetune"
 
     if [ ! -d "$RUNS_DIR" ]; then
         echo "错误: 找不到 runs 目录: $RUNS_DIR"
@@ -54,10 +57,11 @@ else
     fi
 
     # 查找匹配 task 的最新目录
-    LATEST_RUN=$(ls -td "$RUNS_DIR"/${TASK_LOWER}.* 2>/dev/null | head -1)
+    LATEST_RUN=$(ls -td "$RUNS_DIR"/${TASK_PREFIX}.* 2>/dev/null | head -1)
 
     if [ -z "$LATEST_RUN" ]; then
         echo "错误: 找不到 task '$TASK' 对应的 run 目录"
+        echo "  (查找前缀: ${TASK_PREFIX})"
         echo "请检查: $RUNS_DIR/"
         echo "或使用方式2直接指定完整路径"
         exit 1

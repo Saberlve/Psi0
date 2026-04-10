@@ -12,7 +12,7 @@
 #   bash scripts/pipeline/real/deploy_psi0-rtc.sh <task> [server_ip]
 #
 # 示例:
-#   bash scripts/pipeline/real/deploy_psi0-rtc.sh Hug_box_and_move
+#   bash scripts/pipeline/real/deploy_psi0-rtc.sh 
 #   bash scripts/pipeline/real/deploy_psi0-rtc.sh Hug_box_and_move 192.168.1.100
 #
 # 参数:
@@ -28,7 +28,7 @@
 PORT=8014
 
 # 默认任务名称 (与 finetune 对齐)
-DEFAULT_TASK="Hug_box_and_move"
+DEFAULT_TASK="Pick_toys_into_box_and_lift_and_turn_and_put_on_the_chair_new_target_yaw"
 # 默认服务器 IP
 DEFAULT_SERVER_IP="127.0.0.1"
 
@@ -48,6 +48,20 @@ SERVER_IP="${2:-$DEFAULT_SERVER_IP}"
 # 使用 readlink -f 解析脚本真实路径，避免 symlink 导致 cd 错误
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 cd "$SCRIPT_DIR/../teleop"
+export PYTHONPATH="$SCRIPT_DIR/..${PYTHONPATH:+:$PYTHONPATH}"
+
+# Avoid ROS python packages shadowing deployment dependencies such as pinocchio.
+unset AMENT_PREFIX_PATH
+unset CMAKE_PREFIX_PATH
+unset COLCON_PREFIX_PATH
+unset ROS_DISTRO
+unset ROS_VERSION
+unset ROS_PYTHON_VERSION
+unset ROS_LOCALHOST_ONLY
+if [ -n "${PYTHONPATH:-}" ]; then
+    CLEANED_PYTHONPATH="$(printf '%s' "$PYTHONPATH" | tr ':' '\n' | grep -v '^/opt/ros/' | paste -sd ':' -)"
+    export PYTHONPATH="$CLEANED_PYTHONPATH"
+fi
 
 # 启动机器人端推理程序
 # psi-inference_rtc.py:
