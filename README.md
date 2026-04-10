@@ -109,7 +109,7 @@ See the detailed teleoperation guide here:
 export task=Hug_box_and_move
 
 hf download USC-PSI-Lab/psi-data \
-  g1_real_raw/$task.zip \
+  gz1_real_raw/$task.ip \
   --local-dir=$PSI_HOME/data/real_teleop_g1 \
   --repo-type=dataset
 

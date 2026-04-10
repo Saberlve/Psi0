@@ -9,7 +9,7 @@ wheels/
 # Virtual environments
 .venv*
 **/model/**
-**/data/**
+data/**
 cache
 *.mp4
 ml-egodex_dataset/ # soft link to the egodex dataset

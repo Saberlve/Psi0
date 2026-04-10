@@ -1,2 +1,0 @@
-Found 0 files containing 48-dimensional action data with absolute values > 5.0:
-
