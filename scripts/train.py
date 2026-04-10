@@ -211,13 +211,19 @@ def train(config: LaunchConfig):
     overwatch.info(f"Num processes (GPUs) = {trainer.world_size}", ctx_level=2)
     # fmt: on
 
+    # ========================================================================
+    # 步骤 1: 准备 trainer 与 accelerator，并从 checkpoint 恢复训练状态
+    # ========================================================================
     trainer.prepare(accelerator)
     global_step = initial_global_step = trainer.resume_from_checkpoint()[0]
     epoch_start = global_step // trainer.num_steps_per_epoch
 
     overwatch.info(f"Accelerator runs in: {trainer.project_dir}")
     trainer.set_train()
-    
+
+    # ========================================================================
+    # 步骤 2: 初始化进度条和训练状态变量
+    # ========================================================================
     progress_bar = tqdm(
         range(0, trainer.max_training_steps),
         initial=initial_global_step,
@@ -227,40 +233,54 @@ def train(config: LaunchConfig):
     )
 
     is_max_train_steps_reached = (initial_global_step >= trainer.max_training_steps)
-    # skip_resumed_steps = False
     skip = 0
 
+    # ========================================================================
+    # 步骤 3: 主训练循环 - 遍历 epoch 和 batch
+    # ========================================================================
     for epoch in range(epoch_start, MAX_TRAINING_EPOCHS):
         trainer.next_epoch(epoch)
         accelerator.wait_for_everyone()
+
+        # ------------------------------------------------------------------
+        # 步骤 3a: 遍历训练 batch
+        # ------------------------------------------------------------------
         for local_step, batch in enumerate(trainer.train_dataloader):
+            # Skip steps if resuming from checkpoint (to avoid re-training on already-seen batches)
             if (
                 config.train.skip_resumed_steps
                 and skip < initial_global_step % trainer.num_steps_per_epoch
             ):
-                # skip to inital global step
                 skip += 1
                 continue
+
+            # 执行前向传播、反向传播和优化器更新
             sync_gradients, losses = trainer.step(batch_str_to_tensor(batch), global_step, local_step)
             
             if sync_gradients:
-                # log metrics
-                trainer.log(flatten({**losses, "epoch": epoch}, parent_key="train")) 
+                # ------------------------------------------------------------------
+                # 步骤 3b: 记录训练指标（loss, learning rate, epoch）
+                # ------------------------------------------------------------------
+                trainer.log(flatten({**losses, "epoch": epoch}, parent_key="train"))
 
-                # save checkpoints
+                # ------------------------------------------------------------------
+                # 步骤 3c: 按配置间隔保存 checkpoint
+                # ------------------------------------------------------------------
                 if (global_step + 1) % config.train.checkpointing_steps == 0 or global_step == trainer.max_training_steps - 1:
-                    accelerator.wait_for_everyone() # ensures fsdp checkpointing without deadlock
-                    save_path = trainer.save_checkpoint(global_step+1)
+                    accelerator.wait_for_everyone()  # ensures fsdp checkpointing without deadlock
+                    save_path = trainer.save_checkpoint(global_step + 1)
                     accelerator.wait_for_everyone()
-                    
+
                     if overwatch.is_rank_zero():
                         tqdm.write(f"Saved state to {save_path}")
 
-                # validation
+                # ------------------------------------------------------------------
+                # 步骤 3d: 按配置间隔运行 validation
+                # ------------------------------------------------------------------
                 if config.train.validation_steps > 0 and (
-                        global_step % config.train.validation_steps == 0 or 
+                        global_step % config.train.validation_steps == 0 or
                         global_step == trainer.max_training_steps - 1
-                    ) :
+                    ):
                     gc.collect()
                     torch.cuda.empty_cache()
                     trainer.set_eval()
@@ -268,14 +288,14 @@ def train(config: LaunchConfig):
                         device_type="cuda", dtype=trainer.dtype
                     ):
                         eval_losses = trainer.evaluate()
-                        if eval_losses is not None: # FIXME
-                            trainer.log(flatten(eval_losses, parent_key="eval")) 
+                        if eval_losses is not None:
+                            trainer.log(flatten(eval_losses, parent_key="eval"))
                     trainer.set_train()
-                    """ NOTE:
-                        This is a workaround for iterating over val_dataloader in the middle of training_dataloader.
-                        When val dataloader dost not end explicitly, eg., the val dataloader is wrapped in a tqdm progress bar,
-                        and the bar is closed before the end of the dataloader, it will cause an inconsistent accelerate gradient state
-                    """
+
+                    # ------------------------------------------------------------------
+                    # 兼容性处理：确保 val_dataloader 正确结束，避免 accelerate
+                    # 梯度状态在 evaluation 后出现不一致
+                    # ------------------------------------------------------------------
                     if hasattr(trainer, "val_dataloader") and isinstance(
                         trainer.val_dataloader, AcceleratorDataLoaderStateMixin
                     ):
@@ -296,6 +316,9 @@ def train(config: LaunchConfig):
                 progress_bar.set_postfix(dict(loss=losses["loss"], lr=nice(trainer.lr)))
                 global_step += 1
 
+            # ------------------------------------------------------------------
+            # 步骤 3e: 检查是否达到最大训练步数，是则跳出循环
+            # ------------------------------------------------------------------
             if global_step >= trainer.max_training_steps:
                 if overwatch.is_rank_zero():
                     tqdm.write("Training has reached maximum steps.")
@@ -305,6 +328,9 @@ def train(config: LaunchConfig):
         if is_max_train_steps_reached:
             break
 
+    # ========================================================================
+    # 步骤 4: 训练收尾 - 清理资源并结束 accelerator
+    # ========================================================================
     accelerator.wait_for_everyone()
     trainer.finalize()
     overwatch.info("Happy Ending!")

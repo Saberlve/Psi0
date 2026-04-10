@@ -91,53 +91,56 @@ class PaddedCollatorForTogether:
         self.padding_side = padding_side
         self.pixel_values_dtype = pixel_values_dtype
 
+    # ========================================================================
+    # Collate: 将 list of samples 合并为 batch，处理变长序列的 padding
+    # ========================================================================
     def __call__(self, instances):
-        
-        # Extract sequences
-        input_ids = [instance["input_ids"].squeeze(0) if instance["input_ids"].dim() == 2 else instance["input_ids"] 
+        # ------------------------------------------------------------------
+        # 步骤 1: 提取各字段 — input_ids, pixel_values 等
+        # ------------------------------------------------------------------
+        input_ids = [instance["input_ids"].squeeze(0) if instance["input_ids"].dim() == 2 else instance["input_ids"]
                     for instance in instances]
-
         pixel_values = [instance["pixel_values"] for instance in instances]
         dataset_names = [instance["dataset_name"] for instance in instances] if "dataset_name" in instances[0] else None
 
-        # Only support right padding for now
+        # ------------------------------------------------------------------
+        # 步骤 2: pad_sequence — input_ids 右填充到 model_max_length
+        # ------------------------------------------------------------------
         assert self.padding_side == "right", f"Invalid Tokenizer padding_side={self.padding_side}"
-
-        # Pad sequences
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.pad_token_id)
+        input_ids = input_ids[:, :self.model_max_length]  # 截断超长序列
+        attention_mask = input_ids.ne(self.pad_token_id)  # 有效位置=1, padding=0
 
-        # Truncate if longer than model_max_length
-        input_ids = input_ids[:, :self.model_max_length]
-
-        # Attention mask based on pad token
-        attention_mask = input_ids.ne(self.pad_token_id)
-
-        # Stack pixel_values
+        # ------------------------------------------------------------------
+        # 步骤 3: torch.stack — 堆叠 pixel_values, image_grid_thw
+        # ------------------------------------------------------------------
         if isinstance(pixel_values[0], torch.Tensor):
             pixel_values = torch.stack(pixel_values).to(dtype=self.pixel_values_dtype)
         elif isinstance(pixel_values[0], dict):
             pixel_values = {k: torch.stack([pv[k] for pv in pixel_values]) for k in pixel_values[0]}
         else:
             raise ValueError(f"Unsupported pixel_values type: {type(pixel_values[0])}")
-
-        # Stack image_grid_thw
         image_grid_thw = torch.stack([instance["image_grid_thw"].squeeze(0) for instance in instances])
 
-        # Build output
+        # ------------------------------------------------------------------
+        # 步骤 4: 构建输出 dict — VLM 相关
+        # ------------------------------------------------------------------
         output = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "pixel_values": pixel_values, 
+            "pixel_values": pixel_values,
             "image_grid_thw": image_grid_thw,
         }
         if dataset_names is not None:
             output["dataset_name"] = dataset_names
 
+        # ------------------------------------------------------------------
+        # 步骤 5: torch.stack — 堆叠 actions, states, masks, raw_images
+        # ------------------------------------------------------------------
         raw_actions = np.stack([instance["raw_actions"] for instance in instances]) if "raw_actions" in instances[0] else None
         if raw_actions is not None:
             output["raw_actions"] = raw_actions
 
-        # print(type(instances[0]["actions_mask"]), dataset_names)
         actions_mask = torch.stack([torch.from_numpy(instance["actions_mask"]) for instance in instances]) if "actions_mask" in instances[0] else None
         if actions_mask is not None:
             output["actions_mask"] = actions_mask

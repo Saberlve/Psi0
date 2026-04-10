@@ -12,15 +12,22 @@ from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import IterableDataset as TorchIterableDataset
 
 class Dataset(torch.utils.data.Dataset):
+    """包装 LeRobotDataset，应用 DataTransform (Repack → Field → Model)"""
+
     def __init__(self, dataCfg: DataConfig, dataset: TorchDataset|Any, **kwargs) -> None:
-        self.raw_dataset = dataset
-        self.transform = dataCfg.transform
+        self.raw_dataset = dataset                      # LeRobotDatasetWrapper (从磁盘读取)
+        self.transform = dataCfg.transform               # DataTransform (Repack + Field + Model)
         self.transform_kwargs = kwargs.get("transform_kwargs", {})
 
     def __len__(self):
         return len(self.raw_dataset)  # type: ignore
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
+        # ------------------------------------------------------------------
+        # 数据迭代流程:
+        # 1. raw_dataset[idx]: 从 LeRobotDataset 读取原始数据 (PIL Image, numpy, str)
+        # 2. transform(raw): 依次执行 Repack → Field → Model 三步 transform
+        # ------------------------------------------------------------------
         raw = self.raw_dataset[idx]
         data = self.transform(raw, **self.transform_kwargs)
         return data

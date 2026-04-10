@@ -39,13 +39,26 @@ class FieldTransform(BaseModel):
         return data
 
 class DataTransform(BaseModel):
-    repack: RepackTransform
-    model: ModelTransform
-    field: FieldTransform
-    
-    def __call__(self, data:dict[str, Any], **kwargs) -> dict[str, Any]:
+    """三层 Transform 组合: Repack → Field → Model"""
+    repack: RepackTransform    # 重新打包: 提取图像/状态/action，padding 到固定维度
+    model: ModelTransform      # 模型输入处理: VLM 图像预处理、构建输入
+    field: FieldTransform      # 字段处理: bounds 归一化 actions/states
+
+    def __call__(self, data: dict[str, Any], **kwargs) -> dict[str, Any]:
+        # ------------------------------------------------------------------
+        # 步骤 1: RepackTransform — 从 LeRobot 原始数据提取字段，padding 固定维度
+        #   输出: observations (List[PIL]), states, actions, instruction, actions_mask
+        # ------------------------------------------------------------------
         data = self.repack(data, **kwargs)
+        # ------------------------------------------------------------------
+        # 步骤 2: FieldTransform — bounds 归一化 actions (和 states)
+        #   输出: actions (归一化到 [-1,1]), raw_actions (原始值)
+        # ------------------------------------------------------------------
         data = self.field(data, **kwargs)
+        # ------------------------------------------------------------------
+        # 步骤 3: ModelTransform — VLM 预处理，构建模型输入
+        #   输出: input_ids, pixel_values, image_grid_thw, actions, states, ...
+        # ------------------------------------------------------------------
         data = self.model(data, **kwargs)
         return data
     
@@ -336,24 +349,32 @@ class RealRepackTransform(LerobotRepackTransform):
         return delta
 
     def __call__(self, data: dict[str, Any], **kwargs) -> dict[str, Any]:
+        # ------------------------------------------------------------------
+        # 步骤 1: 提取并 padding states 和 actions 到固定维度 (pad_action_dim=36, pad_state_dim=36)
+        # ------------------------------------------------------------------
         states, _ = pad_to_len(data[self.state_key], self.pad_state_dim) if self.pad_state_dim is not None else (data[self.state_key], None)
 
         if self.pad_action_dim is not None:
-            actions, mask = pad_to_len(data[self.action_key], self.pad_action_dim) 
+            actions, mask = pad_to_len(data[self.action_key], self.pad_action_dim)
         else:
             actions = data[self.action_key]
             mask = np.ones_like(actions, dtype=bool)
 
+        # ------------------------------------------------------------------
+        # 步骤 2: 构建 Repack 输出 dict
+        # observations: list of PIL Image (从原始 image tensor 转换)
+        # actions/states: 已经是 numpy (后续归一化用)
+        # ------------------------------------------------------------------
         result = {
-            "observations": [ 
+            "observations": [
                 pt_to_pil(data[key], normalized=False)
                 for key in self.image_keys
-            ], # list of PIL Image
-            "states": np.array(states, dtype=np.float32), # (To, Da)
-            "actions": np.array(actions, dtype=np.float32),  # (Tp, Da)
+            ],  # list of PIL Image
+            "states": np.array(states, dtype=np.float32),      # (To, Da)
+            "actions": np.array(actions, dtype=np.float32),    # (Tp, Da)
             "instruction": data[self.instruction_key].lower(),
-            "actions_mask": mask, #(Tp, Da)
-        } 
+            "actions_mask": mask,                              # (Tp, Da)
+        }
         return result
 
 class SimpleRepackTransform(LerobotRepackTransform):
@@ -462,32 +483,45 @@ class ActionStateTransform(FieldTransform):
             self.state_max = pad_to_len(np.array(self.state_max, dtype=np.float32), self.pad_state_dim, dim=0)[0].tolist()
 
     def __call__(self, data: dict[str, Any], **kwargs) -> dict[str, Any]:
+        # ------------------------------------------------------------------
+        # Bounds 归一化: (x - min) / (max - min) * 2 - 1 映射到 [-1, 1]
+        # ------------------------------------------------------------------
         assert self.action_min is not None and self.action_max is not None, \
             f"{self.stat_path} is not loaded properly. Probably {resolve_path(self.stat_path)} does not exist."
         action_min = np.array(self.action_min, dtype=np.float32)
         action_max = np.array(self.action_max, dtype=np.float32)
+
+        # 状态归一化 (若启用)
         if self.normalize_state:
             data["states"] = self.normalize_state_func(data["states"])
 
-        # tolerate near-zero, not just exact zero
-        ill_mask = np.abs(action_max - action_min) < 1e-4 * (np.abs(action_max) + np.abs(action_min) + 1e-8) 
-        action_max[ill_mask] = 1.0  # prevent division by zero
+        # ------------------------------------------------------------------
+        # 步骤 1: 处理近零范围 (防止除零) — 标记 ill_mask
+        # ------------------------------------------------------------------
+        ill_mask = np.abs(action_max - action_min) < 1e-4 * (np.abs(action_max) + np.abs(action_min) + 1e-8)
+        action_max[ill_mask] = 1.0
+
+        # ------------------------------------------------------------------
+        # 步骤 2: Bounds 归一化 actions — (x - min) / (max - min) * 2 - 1
+        # ------------------------------------------------------------------
         actions_normalized = np.where(
             ill_mask, data["actions"], (data["actions"] - action_min) / (action_max - action_min) * 2 - 1
         )
 
+        # ------------------------------------------------------------------
+        # 步骤 3: 应用归一化 mask (某些维度保留原始值，如 gripper)
+        # ------------------------------------------------------------------
         if self.use_norm_mask:
             actions = np.where(self.action_norm_masks, actions_normalized, data["actions"])
-        else: 
+        else:
             actions = actions_normalized
 
-        # if (np.abs(actions) > 10.0).any():
-        #     print("Error: values outside quantile range during normalization.")
-
+        # ------------------------------------------------------------------
+        # 步骤 4: clip 到 [-1, 1]，保存原始值
+        # ------------------------------------------------------------------
         actions = np.clip(actions, -1, 1).astype(np.float32)
-        # print(data["dataset"], actions.max(), actions.min(), actions.mean(), actions.std())
-        data["raw_actions"] = data["actions"]
-        data["actions"] = actions
+        data["raw_actions"] = data["actions"]   # 保存原始 actions (用于可视化等)
+        data["actions"] = actions               # 使用归一化后的 actions
 
         return data
 
@@ -591,25 +625,27 @@ class Qwen3vlModelTransform(ModelTransform):
         "he"    : [240, 320],
     })
 
+    # ========================================================================
+    # VLM 模型输入预处理: 图像增强 + 构建 VLM 输入
+    # ========================================================================
     def __call__(
-        self, 
-        data: dict[str, Any], 
+        self,
+        data: dict[str, Any],
         no_aug: bool = False,
-        vlm_processor = None, 
-        action_tokenizer = None, 
+        vlm_processor=None,
+        action_tokenizer=None,
         **kwargs
     ) -> dict[str, Any]:
+        # vlm_processor 缺失时跳过，仅返回 raw_actions (用于测试)
         if vlm_processor is None or action_tokenizer is None:
             return {"raw_actions": data["actions"], **data}
-        """
-        data: dict with keys:
-            - instruction: str
-            - observations: List[Image] (To x PIL)
-            - states: (To, Da) torch.Tensor
-            - action: (Tp, Da) torch.Tensor
-        """
+
+        # ------------------------------------------------------------------
+        # 步骤 1: 图像预处理 — resize + color_jitter (可选)
+        # ------------------------------------------------------------------
         do_img_aug = False if no_aug else self.img_aug
         if self.adaptive_resize:
+            # 适配不同数据集的图像尺寸
             assert data["dataset"] is not None
             match data["dataset"]:
                 case "egodex":
@@ -630,19 +666,32 @@ class Qwen3vlModelTransform(ModelTransform):
         instruction = data["instruction"]
         state = data["states"]
         action = data["actions"]
+
+        # ------------------------------------------------------------------
+        # 步骤 2: 构建 Qwen-VL 输入 (messages → input_ids, pixel_values, image_grid_thw)
+        # ------------------------------------------------------------------
         inputs, num_answer_tokens_list = self.build_qwenvl_inputs(
             vlm_processor, action_tokenizer, [images], [instruction], [state], [action]
         )
+
+        # ------------------------------------------------------------------
+        # 步骤 3: 构建 labels — 仅对 answer + EOS + formatting tokens 计算 loss
+        # ------------------------------------------------------------------
         labels = copy.deepcopy(inputs["input_ids"])
-        # keep loss on the answer + EOS + formatting tokens
-        labels[:, : -(num_answer_tokens_list[0] + 2)] = IGNORE_INDEX 
+        labels[:, : -(num_answer_tokens_list[0] + 2)] = IGNORE_INDEX
         inputs["labels"] = labels
+
+        # ------------------------------------------------------------------
+        # 步骤 4: 附加元数据
+        # ------------------------------------------------------------------
         inputs["dataset_name"] = data.get("dataset", "unknown")
-        inputs["raw_actions"] = action
-        # inputs["raw_instruction"] = instruction
-        inputs["raw_images"] = np.stack([np.array(img) for img in images])
+        inputs["raw_actions"] = action                    # 原始 (归一化前) actions
+        inputs["raw_images"] = np.stack([np.array(img) for img in images])  # 原始图像 (可视化用)
         return inputs
 
+    # ========================================================================
+    # 构建 Qwen-VL 输入: 构建 messages → tokenize → processor 生成模型输入
+    # ========================================================================
     def build_qwenvl_inputs(
         self,
         vlm_processor,
@@ -654,33 +703,34 @@ class Qwen3vlModelTransform(ModelTransform):
         **kwargs,
     ):
         """adapted from Qwen_VL_Interface.build_qwenvl_inputs"""
-        # Create messages: one message per sample
+        # ------------------------------------------------------------------
+        # 步骤 1: 构建 messages — user (images + instruction) + assistant (action)
+        # ------------------------------------------------------------------
         messages = []
         num_answer_tokens_list = []
-        assert len(images) == len(
-            instructions
-        ), "Images and instructions must have the same length"
+        assert len(images) == len(instructions), "Images and instructions must have the same length"
 
         for imgs, instruction, action in zip(images, instructions, actions):
+            # action tokenizer: 将归一化的 action 数值转换为文本 token
             tokenized_action = action_tokenizer(action)
             raw_action_tokens = vlm_processor.tokenizer(tokenized_action)["input_ids"]
             num_answer_tokens = len(raw_action_tokens)
             num_answer_tokens_list.append(num_answer_tokens)
 
-            # print(action[0].shape)
+            # 构建 user message: 图像 + 文本指令
             content = [{"type": "image", "image": img} for img in imgs]
             content.append({"type": "text", "text": instruction})
             user_msg = {"role": "user", "content": content}
+            # 构建 assistant message: action 作为期望输出
             assistant_msg = {
                 "role": "assistant",
-                "content": [
-                    {"type": "text", "text": tokenized_action}
-                ],  # squeeze batch dim
+                "content": [{"type": "text", "text": tokenized_action}],
             }
             messages.append([user_msg, assistant_msg])
 
-        # Prepare text prompts using processor
-        # default process is json --> message --> texts --> input_ids
+        # ------------------------------------------------------------------
+        # 步骤 2: 应用 chat template → 文本 prompt
+        # ------------------------------------------------------------------
         texts = [
             vlm_processor.apply_chat_template(
                 m, tokenize=False, add_generation_prompt=False
@@ -688,11 +738,18 @@ class Qwen3vlModelTransform(ModelTransform):
             for m in messages
         ]
 
+        # ------------------------------------------------------------------
+        # 步骤 3: process_vision_info 提取图像信息 (image_patch_size=16)
+        # ------------------------------------------------------------------
         try:
             from qwen_vl_utils import process_vision_info
         except:
             raise ImportError("qwen_vl_utils not found, make sure to install it if using Qwen-VL model!")
-        image_inputs, video_inputs = process_vision_info(messages, image_patch_size=16)  # type: ignore
+        image_inputs, video_inputs = process_vision_info(messages, image_patch_size=16)
+
+        # ------------------------------------------------------------------
+        # 步骤 4: vlm_processor 生成最终输入: input_ids, pixel_values, image_grid_thw
+        # ------------------------------------------------------------------
         inputs = vlm_processor(
             text=texts,
             images=image_inputs,

@@ -420,7 +420,7 @@ class JointVLAAttnProcessor: #(nn.Module):
         return hidden_states, encoder_hidden_states
     
         
-class ObservationProjection(nn.Module): # FIXME naming
+class ObservationProjection(nn.Module): 
     """ VLT observation projector
 
     Args:
@@ -445,19 +445,8 @@ class ObservationProjection(nn.Module): # FIXME naming
     ):
         super().__init__()
 
-        # TODO 1. compare
-        
-        # self.time_net = _TimeNetwork(time_dim=256, out_dim=512)
-        
-        # self.time_proj = Timesteps(timestep_in_dim, timestep_flip_sin_to_cos, timestep_freq_shift)
-        # self.time_embedding = TimestepEmbedding(timestep_in_dim, output_dim, act_fn="silu")
         self.action_pred_horizon = action_pred_horizon
         self.action_dim = action_dim
-        # self.ac_proj = nn.Sequential(
-        #     nn.Linear(action_dim, action_dim),
-        #     nn.GELU(approximate="tanh"),
-        #     nn.Linear(action_dim, output_dim),
-        # )
 
         # _DiTNoiseNet.__init__
         self.enc_pos = _PositionalEncoding(d_model=output_dim)
@@ -498,26 +487,6 @@ class ObservationProjection(nn.Module): # FIXME naming
             self.visual_features = nn.ModuleList(feat_list)
             self.views_proj = nn.Linear(view_feature_dim, output_dim, bias=True) # TODO configure 1920 # boqian_fix
 
-            # TODO abl: more layers # view proj
-            # self.fc1 = nn.Linear(self.vision_dim, initial_projection_dim, bias=True)
-            # self.fc2 = nn.Linear(initial_projection_dim, self.llm_dim, bias=True)
-            # self.fc3 = nn.Linear(self.llm_dim, self.llm_dim, bias=True)
-            # self.act_fn1 = nn.GELU()
-            # self.act_fn2 = nn.GELU()
-
-            # self.views_proj = nn.Sequential(
-            #     nn.Conv2d(16, output_dim, kernel_size=(2, 2), stride=2, bias=True),
-            #     nn.ReLU(),
-            #     nn.Conv2d(output_dim, output_dim, kernel_size=(2, 2), stride=2, bias=True)
-            # )
-            # self.traj2d_proj = nn.ModuleList([
-            #     nn.Conv2d(16, 512, kernel_size=(2, 2), stride=2, bias=True),
-            #     nn.ReLU(),
-            #     nn.Conv2d(512, output_dim, kernel_size=(2, 2), stride=2, bias=True),
-            #     nn.ReLU(),
-            #     nn.Linear(output_dim, output_dim, bias=True),
-            #     nn.LayerNorm(output_dim)
-            # ])
         
         self.early_fusion = early_fusion
         self.imgs_per_cam = imgs_per_cam
@@ -597,89 +566,126 @@ class ObservationProjection(nn.Module): # FIXME naming
         norm = nn.Identity() # feat_norm = None
         self.post_proc = nn.Sequential(linear_proj, norm, nn.Dropout(dropout))
 
-    def forward(self, 
-                # noisy_actions: torch.Tensor, 
-                # timestep: torch.Tensor, 
-                # temp
-                views, 
-                obs, 
-                traj2ds=None, 
-                # ac_flat = None, 
-                # mask_flat = None, 
-                text_embeddings = None, 
+    # ========================================================================
+    # 前向传播: 编码观测 (VLM视觉特征 + Robot状态 + 可选轨迹图) + 位置编码
+    # ========================================================================
+    def forward(self,
+                views,
+                obs,
+                traj2ds=None,
+                text_embeddings=None,
                 vlm_attn_mask=None
                 ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass.
-
-        Args:
-            noisy_actions (`torch.Tensor`):
-                Image features.
-            timestep (`torch.Tensor`):
-                Timestep in denoising process.
-        Returns:
-            `Tuple`[`torch.Tensor`, `torch.Tensor`]: The pair (latents, timestep_emb).
         """
-        # DiffusionTransformerAgent.forward
-        s_t, vlm_attn_mask = self.tokenize_obs(views, obs, traj2ds, text_embeddings=text_embeddings, vlm_attn_mask=vlm_attn_mask) # (B, S, d_model)
-        # _DiTNoiseNet.forward_enc
-        s_t = s_t.transpose(0, 1) # (S, B, d_model)
-        pos = self.enc_pos(s_t) # (S, B, d_model)
-        return (s_t + pos).transpose(0,1), vlm_attn_mask # (B,S,d_model)
+        Args:
+            views: (B, V, N, D) VLM 输出的视觉 token 序列
+            obs: (B, 1, M) Robot 本体状态
+            traj2ds: (B, C, 3, H, W) 2D 轨迹图 (可选)
+            text_embeddings: 文本嵌入 (用于 FiLM 调制，可选)
+            vlm_attn_mask: VLM 注意力掩码
+        Returns:
+            (B, S, d_model): 编码后的观测 hidden states
+            vlm_attn_mask: 更新后的注意力掩码
+        """
+        # ------------------------------------------------------------------
+        # 步骤 1: tokenize_obs — 编码视觉特征 + 状态
+        #   你的配置 (n_conditions=0, use_film=False) 实际路径:
+        #   - views → views_proj → view_tokens.view(B, V*N, D)
+        #   - (跳过 traj2ds 融合，n_conditions=0)
+        #   - (跳过 FiLM 调制，use_film=False)
+        #   - state → state_project → single state_token → concat 到 tokens 末尾
+        #   - post_proc
+        # 输出: (B, S, d_model), vlm_attn_mask
+        # ------------------------------------------------------------------
+        s_t, vlm_attn_mask = self.tokenize_obs(
+            views, obs, traj2ds,
+            text_embeddings=text_embeddings,
+            vlm_attn_mask=vlm_attn_mask
+        )  # (B, S, d_model)
 
-    def tokenize_obs(self, views, obs, traj2ds = None, flatten=False, text_embeddings=None, vlm_attn_mask=None):
-        
-        view_tokens = self.views_proj(views)
-        B,V,S,D = view_tokens.shape
-        
+        # ------------------------------------------------------------------
+        # 步骤 2: 位置编码 — 为观测 token 添加位置信息 (正弦位置编码)
+        # ------------------------------------------------------------------
+        s_t = s_t.transpose(0, 1)  # (S, B, d_model)
+        pos = self.enc_pos(s_t)    # (S, B, d_model)
+
+        # ------------------------------------------------------------------
+        # 步骤 3: 残差连接 — token + position，再转回 (B, S, d_model)
+        # ------------------------------------------------------------------
+        return (s_t + pos).transpose(0, 1), vlm_attn_mask  # (B, S, d_model)
+
+    # ========================================================================
+    # 编码观测: 视觉 token → token_fusion → FiLM → 拼接状态 → 后处理
+    # ========================================================================
+    def tokenize_obs(self, views, obs, traj2ds=None, flatten=False, text_embeddings=None, vlm_attn_mask=None):
+
+        # ------------------------------------------------------------------
+        # 步骤 1: 视觉 token 投影 — VLM 视觉特征投影到 action_hidden_dim
+        # ------------------------------------------------------------------
+        view_tokens = self.views_proj(views)  # (B, V, N, D) → (B, V, N, output_dim)
+        B, V, S, D = view_tokens.shape
+
+        # ------------------------------------------------------------------
+        # 步骤 2: (n_conditions=0 / traj2ds=None，跳过) 轨迹图融合
+        # 你的配置不启用 traj2ds，直接走 else 分支
+        # ------------------------------------------------------------------
         if traj2ds is not None:
+            # 轨迹图编码 → ResNet18 提取轨迹图特征
             traj_tokens = self.embed({}, {f"cond{i}": traj2ds[:, i] for i in range(traj2ds.shape[1])})
 
             if self.token_fusion == "concat":
-                traj_tokens = self.embed_proj(traj_tokens) #(B,S,d_model)
-                tokens = torch.cat([view_tokens.view(B,V*S,D), traj_tokens], dim=1) # (B, tok1+tok2, 1536)
-            elif self.token_fusion == "cross":  
+                # 简单拼接: view_tokens 和 traj_tokens 直接 concat
+                traj_tokens = self.embed_proj(traj_tokens)  # (B, S, d_model)
+                tokens = torch.cat([view_tokens.view(B, V*S, D), traj_tokens], dim=1)
+            elif self.token_fusion == "cross":
+                # 交叉注意力融合: traj_tokens cross attend 到 view_tokens
                 traj_tokens_list, view_tokens_list = [], []
                 for v_idx in range(traj2ds.shape[1]):
-                    # traj2d --> cross attend --> view features
                     view_tokens = self.attn(
                         hidden_states=traj_tokens[:, v_idx*self.traj_n_token, (v_idx+1)*self.traj_n_token],
                         encoder_hidden_states=views[:, v_idx],
                     )
                     traj_tokens_list.append(traj_tokens)
                     view_tokens_list.append(view_tokens)
-
                 traj_tokens = torch.cat(traj_tokens_list, dim=1)
                 traj_tokens = self.embed_proj(traj_tokens)
                 view_tokens = torch.cat(view_tokens_list, dim=1)
-                tokens = torch.cat([view_tokens, traj_tokens], dim=1) # (B, tok1+tok2, 1536)
+                tokens = torch.cat([view_tokens, traj_tokens], dim=1)
             elif self.token_fusion == "perceiver":
+                # Perceiver 融合: 可学习 latents 分别 cross attend views 和 traj_tokens
                 latents1 = self.latents1.repeat(B, 1, 1)
-                # views = self.proj_in1(views)
-                # views = views + text_embeddings[:, None]
                 tokens1 = self.cross_attn1(
                     hidden_states=latents1,
                     encoder_hidden_states=view_tokens.view(B, V*S, D),
                 )
                 latents2 = self.latents2.repeat(B, 1, 1)
                 traj_tokens = self.proj_in2(traj_tokens)
-                # traj2ds = traj2ds + text_embeddings[:, None]
                 tokens2 = self.cross_attn2(
                     hidden_states=latents2,
                     encoder_hidden_states=traj_tokens,
                 )
-                tokens = torch.cat([tokens1, tokens2], dim=1) # (B, tok1+tok2, 1536)
+                tokens = torch.cat([tokens1, tokens2], dim=1)
             else:
                 raise ValueError
         else:
+            # 你的配置 n_conditions=0，走这条: 直接 reshape view_tokens，不做任何轨迹图融合
             assert self._n_conditions == 0, "inconsistent confg"
-            tokens = view_tokens.view(B,V*S,D)
+            tokens = view_tokens.view(B, V*S, D)
 
+        # ------------------------------------------------------------------
+        # 步骤 3: (你的配置 use_film=False，跳过) FiLM 调制
+        # ------------------------------------------------------------------
         if (self.film is not None) and (text_embeddings is not None):
             tokens = self.film(tokens, text_embeddings)
 
+        # ------------------------------------------------------------------
+        # 步骤 4: 融合 Robot 状态 (obs)
+        # 你的配置 _obs_strat="add_token": obs 投影为一个 token，拼接到序列末尾
+        # ------------------------------------------------------------------
         if self._obs_strat == "add_token":
-            obs_token = self._obs_proc(obs)#[:, None]
-            tokens = torch.cat((tokens, obs_token), 1)
+            obs_token = self._obs_proc(obs)  # (B, 1, output_dim)
+            tokens = torch.cat((tokens, obs_token), 1)  # (B, S+1, output_dim)
+            # obs_token 位置标记为有效
             vlm_attn_mask = torch.cat([vlm_attn_mask, torch.ones((vlm_attn_mask.shape[0], 1), device=vlm_attn_mask.device)], 1) if vlm_attn_mask is not None else None
         elif self._obs_strat == "pad_img_tokens":
             obs = self._obs_proc(obs)
@@ -689,7 +695,11 @@ class ObservationProjection(nn.Module): # FIXME naming
         else:
             assert self._obs_strat is None
 
+        # ------------------------------------------------------------------
+        # 步骤 5: 后处理 — Dropout + LayerNorm
+        # ------------------------------------------------------------------
         tokens = self.post_proc(tokens)
+
         if flatten:
             return tokens.reshape((tokens.shape[0], -1)), vlm_attn_mask
         return tokens, vlm_attn_mask
@@ -825,28 +835,6 @@ class VLATransformerBlock(nn.Module):
     ):
         super().__init__()
 
-        # self.training_phase = training_phase
-
-        # from models.dit_policy.data4robotics.models.diffusion import  _SelfAttnEncoder #_TransformerEncoder,
-        # self.encoder_module = _SelfAttnEncoder(
-        #     d_model=dim,
-        #     nhead=num_attention_heads,
-        #     dim_feedforward=2048,
-        #     dropout=0.1,
-        #     activation="gelu",
-        # )
-        # self.encoder_module.reset_parameters() 
-
-        # # decoder blocks
-        # from models.dit_policy.data4robotics.models.diffusion import _DiTDecoder #_TransformerDecoder, 
-        # self.decoder_module = _DiTDecoder(
-        #     d_model=dim,
-        #     nhead=num_attention_heads,
-        #     dim_feedforward=2048,
-        #     dropout=0.1,
-        #     activation="gelu",
-        # )
-        # self.decoder_module.reset_parameters() # _TransformerDecoder.__init__
 
         self.context_pre_only = context_pre_only
         context_norm_type = "ada_norm_continous" if context_pre_only else "ada_norm_zero"
@@ -918,90 +906,75 @@ class VLATransformerBlock(nn.Module):
         self._chunk_size = None
         self._chunk_dim = 0
 
+    # ========================================================================
+    # VLA Transformer Block: 交叉注意力融合 action 和观测特征 + FFN
+    # context_pre_only=False 时: action 和 obs 都做 AdaLN + 交叉注意力 + FFN
+    # ========================================================================
     def forward(
-        self, 
-        # hidden_states: torch.FloatTensor,  #  V
-        # lang_hidden_states: torch.FloatTensor,  # L
-        action_hidden_states: torch.Tensor, # A
-        obs_hidden_states: torch.Tensor, # O
-        temb: torch.Tensor,
-        obs_token_mask: Optional[torch.Tensor] = None,
-        # obs_pos_emb: Optional[torch.FloatTensor] = None,
-        # time_enc: Optional[torch.FloatTensor] = None,
+        self,
+        action_hidden_states: torch.Tensor,  # A: action 特征 (B, Tp, d)
+        obs_hidden_states: torch.Tensor,      # O: 观测特征 (B, S, d)
+        temb: torch.Tensor,                   # T: 时间步嵌入
+        obs_token_mask: Optional[torch.Tensor] = None,  # 观测 token 的注意力掩码
         joint_attention_kwargs=None,
     ):
-        # obs_hidden_states = self.encoder_module(src=obs_hidden_states, pos=obs_pos_emb)
-        # action_hidden_states = self.decoder_module(x=action_hidden_states, t=time_enc, cond=obs_hidden_states) # recursive: _TransformerDecoder.forward
-        
-        norm_action_hidden_states, gate_msa_act, shift_mlp_act, scale_mlp_act, gate_mlp_act = self.norm1_act(action_hidden_states, emb=temb)
+        # ------------------------------------------------------------------
+        # 步骤 1: Action AdaLN-Zero — 用 temb 调制，产生门控和移位参数
+        # ------------------------------------------------------------------
+        norm_action_hidden_states, gate_msa_act, shift_mlp_act, scale_mlp_act, gate_mlp_act = \
+            self.norm1_act(action_hidden_states, emb=temb)
 
+        # ------------------------------------------------------------------
+        # 步骤 2: Obs AdaLN-Zero (context_pre_only=False) 或 AdaLN-Continuous (context_pre_only=True)
+        # 最后一层 context_pre_only=True 时: obs 仅做 AdaLN，不做后续注意力/FFN
+        # ------------------------------------------------------------------
         if self.context_pre_only:
-            """ norm_lang_hidden_states = self.norm1_lang(lang_hidden_states, temb) """
-            norm_obs_hidden_states = self.norm1_obs(obs_hidden_states, temb[:,-1] if len(temb.shape) > 2 else temb)
-
+            # 仅做 AdaLN-Continuous，不返回门控参数
+            norm_obs_hidden_states = self.norm1_obs(
+                obs_hidden_states, temb[:, -1] if len(temb.shape) > 2 else temb
+            )
             gate_msa_obs, shift_mlp_obs, scale_mlp_obs, gate_mlp_obs = None, None, None, None
         else:
-            """ norm_lang_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_lang(
-                lang_hidden_states, emb=temb
-            ) """
-            norm_obs_hidden_states, gate_msa_obs, shift_mlp_obs, scale_mlp_obs, gate_mlp_obs = self.norm1_obs(obs_hidden_states, emb=temb[:,-1] if len(temb.shape) > 2 else temb)
+            # 完整 AdaLN-Zero，返回门控参数
+            norm_obs_hidden_states, gate_msa_obs, shift_mlp_obs, scale_mlp_obs, gate_mlp_obs = \
+                self.norm1_obs(obs_hidden_states, emb=temb[:, -1] if len(temb.shape) > 2 else temb)
 
-        act_attn_output, obs_attn_output = self.attn( ## indirectly calls JointAttnProcessor2_0.__call__, VLAAttnProcessor.__call__
-            # hidden_states=None,
-            # lang_hidden_states=norm_lang_hidden_states,
-            hidden_states=norm_action_hidden_states,
-            encoder_hidden_states=norm_obs_hidden_states,
+        # ------------------------------------------------------------------
+        # 步骤 3: 交叉注意力 — action (query) attend to obs (key/value)
+        # 同时 obs attend to action 
+        # ------------------------------------------------------------------
+        act_attn_output, obs_attn_output = self.attn(
+            hidden_states=norm_action_hidden_states,       # action 作为 query
+            encoder_hidden_states=norm_obs_hidden_states,  # obs 作为 context
             attention_mask=obs_token_mask
-            # **joint_attention_kwargs,
         )
 
-        # Action feed forward
+        # ------------------------------------------------------------------
+        # 步骤 4: Action FFN — 门控 + 残差连接 + AdaLN 调制 + FFN + 残差
+        # ------------------------------------------------------------------
         act_attn_output = gate_msa_act * act_attn_output
-        action_hidden_states = action_hidden_states + act_attn_output
+        action_hidden_states = action_hidden_states + act_attn_output  # 残差
 
         norm_action_hidden_states = self.norm2_act(action_hidden_states)
-        norm_action_hidden_states = norm_action_hidden_states * (1 + scale_mlp_act) + shift_mlp_act
+        norm_action_hidden_states = norm_action_hidden_states * (1 + scale_mlp_act) + shift_mlp_act  # AdaLN 调制
         ff_action_output = self.ff_act(norm_action_hidden_states)
-
         ff_action_output = gate_mlp_act * ff_action_output
-        action_hidden_states = action_hidden_states + ff_action_output
+        action_hidden_states = action_hidden_states + ff_action_output  # 残差
 
-        # attention outputs for the `obs_hidden_states`.
+        # ------------------------------------------------------------------
+        # 步骤 5: Obs FFN — context_pre_only=False 时执行 (你的配置)
+        # ------------------------------------------------------------------
         if self.context_pre_only:
-            # encoder_hidden_states = None
-            obs_hidden_states = None # type:ignore
+            obs_hidden_states = None
         else:
-            assert gate_msa_obs is not None and \
-                shift_mlp_obs is not None and \
-                    scale_mlp_obs is not None and \
-                        gate_mlp_obs is not None
-            """ # lang forward
-            lang_attn_output = c_gate_msa.unsqueeze(1) * lang_attn_output
-            lang_hidden_states = lang_hidden_states + lang_attn_output
-            norm_lang_hidden_states = self.norm2_lang(lang_hidden_states)
-            norm_lang_hidden_states = norm_lang_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
-            if self._chunk_size is not None:
-                # "feed_forward_chunk_size" can be used to save memory
-                context_ff_output = _chunked_feed_forward(
-                    self.ff_lang, norm_lang_hidden_states, self._chunk_dim, self._chunk_size
-                )
-            else:
-                context_ff_output = self.ff_lang(norm_lang_hidden_states)
-            lang_hidden_states = lang_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output """
-            
-            # obs feedforward
-            assert self.norm2_obs is not None
-
             obs_attn_output = gate_msa_obs * obs_attn_output
-            obs_hidden_states = obs_hidden_states + obs_attn_output
+            obs_hidden_states = obs_hidden_states + obs_attn_output  # 残差
 
             norm_obs_hidden_states = self.norm2_obs(obs_hidden_states)
-            norm_obs_hidden_states = norm_obs_hidden_states * (1 + scale_mlp_obs) + shift_mlp_obs
-
-            assert self.ff_obs is not None
+            norm_obs_hidden_states = norm_obs_hidden_states * (1 + scale_mlp_obs) + shift_mlp_obs  # AdaLN 调制
             ff_obs_output = self.ff_obs(norm_obs_hidden_states)
             ff_obs_output = gate_mlp_obs * ff_obs_output
-            obs_hidden_states = obs_hidden_states + ff_obs_output
+            obs_hidden_states = obs_hidden_states + ff_obs_output  # 残差
 
         return action_hidden_states, obs_hidden_states
     
@@ -1083,23 +1056,32 @@ class ActionTransformerModel(
         combined_temb: bool = False
     ):
         super().__init__()
-        # self.inner_dim = num_attention_heads * attention_head_dim
-        self.inner_dim = num_attention_heads * attention_head_dim 
+        # ------------------------------------------------------------------
+        # 步骤 1: 计算 transformer 内部维度 inner_dim = num_heads * head_dim
+        # ------------------------------------------------------------------
+        self.inner_dim = num_attention_heads * attention_head_dim
 
+        # ------------------------------------------------------------------
+        # 步骤 2: 初始化时间步嵌入模块 (Timestep Embedding)
+        # combined_temb=True 时使用 CombinedTimestepTextProjEmbeddings (联合文本和时间)
+        # 否则使用独立的 _TimeNetwork, 这是现在的做法
+        # ------------------------------------------------------------------
         self.combined_temb = combined_temb
         if self.combined_temb:
             self.time_ins_embed = CombinedTimestepTextProjEmbeddings(
                 embedding_dim=self.inner_dim, pooled_projection_dim=pooled_projection_dim
-            ) # used
+            )
         else:
             self.time_ins_embed = _TimeNetwork(time_dim=256, out_dim=action_hidden_dim)
-        """ self.lang_embedder = nn.Linear(joint_attention_dim, caption_projection_dim) """
 
-        # Set the observation projection
+        # ------------------------------------------------------------------
+        # 步骤 3: 观测编码器 (ObservationProjection)
+        # 将 VLM 视觉特征 + robot states + 可选轨迹图编码为 obs_hidden_states(当前不用)
+        # ------------------------------------------------------------------
         self.obs_proj = ObservationProjection(
-            action_pred_horizon=action_pred_horizon, 
-            action_dim=action_dim, 
-            hidden_dim=self.inner_dim, # not used
+            action_pred_horizon=action_pred_horizon,
+            action_dim=action_dim,
+            hidden_dim=self.inner_dim,  # not used
             output_dim=action_hidden_dim,
             n_conditions=n_conditions,
             token_fusion=token_fusion,
@@ -1108,28 +1090,33 @@ class ActionTransformerModel(
             view_feature_dim=view_feature_dim,
             use_film=use_film
         )
-
         total_params = sum(p.numel() for p in self.obs_proj.parameters() if p.requires_grad)
         logger.debug(f"ObservationEncoder parameters: {total_params:,}")
-        # Set the action projection
+
+        # ------------------------------------------------------------------
+        # 步骤 4: Action 输入投影层 (ActionProjectionIn)
+        # 将加噪的 action 向量映射到 action_hidden_dim 维空间
+        # ------------------------------------------------------------------
         self.action_proj_in = ActionProjectionIn(
-            action_pred_horizon=action_pred_horizon, 
-            action_dim=action_dim, 
+            action_pred_horizon=action_pred_horizon,
+            action_dim=action_dim,
             output_dim=action_hidden_dim,
         )
         total_params = sum(p.numel() for p in self.action_proj_in.parameters() if p.requires_grad)
         logger.debug(f"ActionProjectionIn parameters: {total_params:,}")
 
+        # ------------------------------------------------------------------
+        # 步骤 5: VLA Transformer Block 堆叠 (核心模块)
+        # 每一层: action_hidden_states 与 obs_hidden_states 交叉注意力
+        # ------------------------------------------------------------------
         self.transformer_blocks = nn.ModuleList(
             [
-                # IdentityBlock()
-                VLATransformerBlock( # JointTransformerBlock
+                VLATransformerBlock(  # JointTransformerBlock
                     dim=action_hidden_dim,
                     num_attention_heads=action_nheads,
                     attention_head_dim=attention_head_dim,
                     context_pre_only=i == action_num_blocks - 1,
                     qk_norm=qk_norm,
-                    # use_dual_attention=True if i in dual_attention_layers else False,
                     training_phase=training_phase,  # "joint", "action", "traj2d", "action_mini"
                 )
                 for i in range(action_num_blocks)
@@ -1138,13 +1125,20 @@ class ActionTransformerModel(
         total_params = sum(p.numel() for p in self.transformer_blocks[0].parameters() if p.requires_grad)
         logger.debug(f"ActionTransformerBlock parameters: {total_params:,}")
 
+        # ------------------------------------------------------------------
+        # 步骤 6: Action 输出投影层 (ActionProjectionOut)
+        # 将 transformer 输出映射回 action 维度，生成最终 action 预测
+        # ------------------------------------------------------------------
         self.action_proj_out = ActionProjectionOut(
-            hidden_size=action_hidden_dim, 
+            hidden_size=action_hidden_dim,
             action_dim=action_dim
         )
         total_params = sum(p.numel() for p in self.action_proj_out.parameters())
         logger.debug(f"ActionProjectionOut parameters: {total_params:,}")
 
+    # ========================================================================
+    # 前向传播: 时间嵌入 → Action投影 → 观测投影 → Transformer块堆叠 → 输出投影
+    # ========================================================================
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1156,54 +1150,66 @@ class ActionTransformerModel(
         vlm_attn_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
         skip_layers: Optional[List[int]] = None,
-    ) -> Union[List[torch.Tensor], ActionTransformerModelOutput]: 
+    ) -> Union[List[torch.Tensor], ActionTransformerModelOutput]:
         assert joint_attention_kwargs is not None
 
-        if self.config.n_conditions > 0: # type: ignore
-            assert joint_attention_kwargs["traj2ds"].shape[1] == self.config.n_conditions, "model n_conditions does not match" # type: ignore
+        if self.config.n_conditions > 0:  # type: ignore
+            assert joint_attention_kwargs["traj2ds"].shape[1] == self.config.n_conditions, "model n_conditions does not match"  # type: ignore
 
-        # L
+        # ------------------------------------------------------------------
+        # 步骤 1: 时间步嵌入 (Timestep Embedding)
+        # combined_temb=True 时联合 timestep + pooled_projections (文本) 一起 embedding
+        # 否则仅 embedding timestep
+        # ------------------------------------------------------------------
         if self.combined_temb:
             temb = self.time_ins_embed(timestep, pooled_projections)
-        else: 
+        else:
             temb = self.time_ins_embed(timestep)
 
-        """ lang_hidden_states = self.lang_embedder(encoder_hidden_states) """
-
-        # A
+        # ------------------------------------------------------------------
+        # 步骤 2: Action 输入投影 (ActionProjectionIn)
+        # 将加噪的 action 向量 (B, Tp, Da) 映射到 action_hidden_dim 维 hidden states
+        # ------------------------------------------------------------------
         noisy_action = joint_attention_kwargs.pop("action_hidden_embeds")
         action_hidden_states = self.action_proj_in(noisy_action)
 
-        # Obs: V+Proprio
+        # ------------------------------------------------------------------
+        # 步骤 3: 观测编码器 (ObservationProjection)
+        # 将 VLM 视觉特征 (views) + robot states + 可选轨迹图 (traj2ds)
+        # 编码为 obs_hidden_states (S, B, d_model) 和对应的 mask
+        # ------------------------------------------------------------------
         obs_hidden_states, obs_token_mask = self.obs_proj(
             views=joint_attention_kwargs["views"],
             obs=joint_attention_kwargs["obs"],
             traj2ds=joint_attention_kwargs["traj2ds"],
             text_embeddings=pooled_projections,
             vlm_attn_mask=vlm_attn_mask
-        ) # S, B, d_model
-        
+        )  # S, B, d_model
+
+        # ------------------------------------------------------------------
+        # 步骤 4: 通过 N 个 VLA Transformer Block 进行交叉注意力
+        # 每一层: action_hidden_states (A) 和 obs_hidden_states (O+V) 进行融合, 双向交叉注意力 + FFN
+        # 支持 skip_layers: 跳过指定层 (用于某些加速/蒸馏技巧)
+        # ------------------------------------------------------------------
         for index_block, block in enumerate(self.transformer_blocks):
             is_skip = True if skip_layers is not None and index_block in skip_layers else False
             if is_skip:
                 continue
 
             action_hidden_states, obs_hidden_states = block(
-                # hidden_states=hidden_states, # V
-                # lang_hidden_states=lang_hidden_states, # L
-                action_hidden_states=action_hidden_states, # A
-                obs_hidden_states=obs_hidden_states, # O
-                temb=temb,
-                obs_token_mask=obs_token_mask
-                # time_enc=time_enc,
-                # obs_pos_emb=obs_pos_emb,
-                # joint_attention_kwargs=joint_attention_kwargs,
+                action_hidden_states=action_hidden_states,  # A: action 特征
+                obs_hidden_states=obs_hidden_states,        # O: 观测特征
+                temb=temb,                                 # T: 时间步嵌入
+                obs_token_mask=obs_token_mask             # mask: 有效观测 token
             )
 
+        # ------------------------------------------------------------------
+        # 步骤 5: Action 输出投影 (ActionProjectionOut)
+        # 将处理后的 action_hidden_states 映射回原始 action 维度 (B, Tp, Da)
+        # ------------------------------------------------------------------
         action_output = self.action_proj_out(
             x=action_hidden_states,
             t=temb,
-            # cond=obs_hidden_states,
         )
         return ActionTransformerModelOutput(action=action_output)
 
@@ -1494,6 +1500,7 @@ class Psi0Model(nn.Module):
                 action_hidden_dim=model_cfg.hidden_dim,
             )
         else:
+            # main action transformer model
             self.action_header = ActionTransformerModel(
                 resnet_store_path=model_cfg.resnet_store_path,
                 odim=model_cfg.odim,
